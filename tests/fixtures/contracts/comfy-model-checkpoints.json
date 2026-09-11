@@ -1,0 +1,5 @@
+[
+  "model_a.safetensors",
+  "model_b.safetensors",
+  "model_c_fp8.safetensors"
+]

@@ -1,0 +1,7 @@
+{
+  "code": 804,
+  "msg": "APIKEY_TASK_IS_RUNNING",
+  "data": {
+    "netWssUrl": "wss://example.invalid/ws/anonymous"
+  }
+}

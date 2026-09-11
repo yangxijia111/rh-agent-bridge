@@ -4,6 +4,7 @@
 import { z } from "zod";
 import type { WorkflowGraph } from "../graph/types.js";
 import { parseApiFormat } from "../graph/parse.js";
+import { rhError } from "../errors.js";
 
 /** JSON 值 union：z.unknown() 在 zod 中等价 optional，无法表达 required，故用显式 union */
 const jsonValueSchema = z.union([
@@ -64,12 +65,29 @@ export const workflowGraphJsonSchema = z.object({
   ),
 });
 
-/** 解析 wire 形态 → WorkflowGraph（补 rawMeta 之外的完整结构） */
+/** 解析 wire 形态 → WorkflowGraph（P0.1-05：key/id 不一致直接拒绝，不静默纠正） */
 export function graphFromWire(value: z.infer<typeof workflowGraphJsonSchema>): WorkflowGraph {
   const nodes: WorkflowGraph["nodes"] = {};
-  for (const [id, node] of Object.entries(value.nodes)) {
-    nodes[id] = {
-      id: node.id.length > 0 ? node.id : id,
+  const seenIds = new Set<string>();
+  for (const [key, node] of Object.entries(value.nodes)) {
+    const id = node.id.length > 0 ? node.id : key;
+    if (id !== key) {
+      throw rhError(
+        "INVALID_WORKFLOW",
+        `wire graph invariant violated: nodes["${key}"].id === "${id}"; map key must equal node id`,
+        { key, id },
+      );
+    }
+    if (seenIds.has(id)) {
+      throw rhError(
+        "INVALID_WORKFLOW",
+        `wire graph invariant violated: duplicate node id "${id}"`,
+        { id },
+      );
+    }
+    seenIds.add(id);
+    nodes[key] = {
+      id,
       classType: node.classType,
       ...(node.title !== undefined ? { title: node.title } : {}),
       inputs: node.inputs ?? {},

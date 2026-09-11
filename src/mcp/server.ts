@@ -13,7 +13,7 @@ import { TOOL_REGISTRY } from "../tools/registry.js";
 
 /** 构建 MCP server（测试可注入自定义 context / transport） */
 export function buildMcpServer(ctx: BridgeContext): McpServer {
-  const server = new McpServer({ name: "rh-agent-bridge", version: "0.1.0" });
+  const server = new McpServer({ name: "rh-agent-bridge", version: "0.1.1" });
 
   for (const tool of TOOL_REGISTRY) {
     const objectSchema = tool.schema as unknown as z.ZodObject<z.ZodRawShape>;

@@ -12,11 +12,13 @@
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6.svg)
 ![MCP](https://img.shields.io/badge/MCP-stdio-5E5CE6.svg)
-![Tests](https://img.shields.io/badge/tests-123%20passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-165%20passed-brightgreen.svg)
 
 > Agent-neutral 的 RunningHub / ComfyUI 工作流控制层 —— 让编程智能体用「工作流语义」而不是「鼠标坐标」操作 RunningHub。
 
 **rh-agent-bridge** 是一个面向编程智能体（Codex、Zcode 或任何支持 MCP / CLI 的调用方）的本地工具。它向上提供稳定的结构化工具接口，向下对接 RunningHub 官方 OpenAPI 与 Native ComfyUI 接口，只在 API 确实无法表达时才返回结构化的浏览器兜底请求（由宿主智能体执行）。
+
+> **当前状态：P0/MVP + P0.1 Hardening**（v0.1.1）——P0.1 修复了 `/models` 契约、连接类型校验、baseline 快照语义、nodeInfoList 绕过、graph key/id invariant 等安全与正确性问题。
 
 ## 项目简介 / Overview
 
@@ -29,8 +31,8 @@
 - **API-first**：优先 RunningHub 官方 OpenAPI（任务创建、输出查询、素材上传、workflow 获取），其次 Native ComfyUI（`/proxy/<key>`），浏览器只是最后兜底
 - **结构化图引擎**：API Format JSON ⇄ WorkflowGraph 双向转换；节点查询、不可变 patch（set_input / add_node / remove_node / connect / disconnect）、图 diff、拓扑环检测
 - **参数与拓扑分流**：仅参数变化自动生成官方 `nodeInfoList`；拓扑/连接变化自动切换完整 workflow JSON 提交（官方明确不建议用 nodeInfoList 改连接）
-- **分层静态校验**：Level 1 结构引用/环检测 → Level 2 基于 `/object_info` 的节点与输入类型校验 → Level 3 模型名校验；服务端 `promptTips` 解析为结构化校验结果
-- **Native 能力探测**：运行时 feature-detect `/features`、`/object_info`、`/models`，探测失败自动降级，不影响 OpenAPI 主链路
+- **分层静态校验**：Level 1 结构引用/环检测 → Level 2 基于 `/object_info` 的节点、输入与**连接类型**校验（outputIndex 越界、连接进入 primitive 字段、MODEL→IMAGE 类型不匹配）→ Level 3 模型名校验（优先级：object_info COMBO options → `/models/{folder}` → 字段名 fallback）；服务端 `promptTips` 解析为结构化校验结果
+- **Native 能力探测**：运行时 feature-detect `/features`、`/object_info`、`/models`（folder 列表），模型文件按需 `GET /models/{folder}` 懒加载；探测失败自动降级，不影响 OpenAPI 主链路，逐端点明细（endpoint + status）对 Agent 可见
 - **安全兜底**：浏览器 fallback 返回结构化目标（语义 goal + 域名 allowlist + 前置快照），由宿主智能体用自己的浏览器能力执行
 - **双出口同源**：CLI（`--json` Agent 模式）与 MCP server 共用同一 service 层，13 个工具一一对应
 - **日志双层脱敏**：API key 明文、`/proxy/<key>`、Bearer token、signed URL 全部 mask；`create task` / `upload` 默认禁止自动重试（防重复收费）
@@ -72,7 +74,7 @@ fetch workflow → probe nodes(/object_info) → node search 确认节点存在
 git clone https://github.com/yangxijia111/rh-agent-bridge.git
 cd rh-agent-bridge
 npm install
-npm test        # 123 个测试全部基于 mock，无需真实 key
+npm test        # 165 个测试全部基于 mock，无需真实 key
 ```
 
 复制 `.env.example` 为 `.env` 并填写（`.env` 已被 `.gitignore` 排除，严禁提交）：
@@ -181,7 +183,7 @@ rh-agent-bridge/
 │   ├── tools/             13 个工具 + registry（zod 输入 schema）
 │   ├── cli/               commander CLI（--json Agent 模式）
 │   └── mcp/               MCP stdio server
-├── tests/                 123 个测试 + workflow fixtures
+├── tests/                 165 个测试 + workflow fixtures + API contract fixtures
 ├── examples/              Demo A/B 脚本 + Demo C 说明
 ├── .env.example           环境变量模板
 └── package.json / tsconfig.json / vitest.config.ts / eslint.config.js
@@ -208,30 +210,39 @@ rh-agent-bridge/
 | 层级 | 内容 | 依赖 |
 |---|---|---|
 | Level 1 | 引用存在性、自引用、outputIndex、环检测 | 无 |
-| Level 2 | 节点类存在性、required 输入、类型/枚举/范围 | `/object_info`（缺失自动跳过） |
-| Level 3 | checkpoint / lora / vae 模型名 | `/models`（缺失自动跳过） |
+| Level 2 | 节点类存在性、required 输入、类型/枚举/范围，以及**连接五要素校验**（上游/下游存在、outputIndex 越界、连接进入 primitive 字段 `CONNECTION_NOT_ALLOWED`、类型不匹配 `CONNECTION_TYPE_MISMATCH`；未知 custom datatype 降级 warning 避免误报） | `/object_info`（缺失自动跳过） |
+| Level 3 | 模型名校验，优先级：object_info 该字段 COMBO options → `GET /models/{folder}`（checkpoints/loras/vae/upscale_models）→ 字段名 fallback | 上述任一（缺失自动跳过） |
 | 服务端 | `promptTips` → 结构化 valid / nodeErrors / outputsToExecute | 任务创建响应 |
 
 ### 3. 节点目录与反 hallucinate
 
-节点目录在运行时从 Native ComfyUI `/object_info` 获取（TTL 缓存：object_info 10 分钟 / models 5 分钟 / features 30 分钟）。查找失败会强制刷新一次，仍不存在则返回 `NODE_NOT_FOUND`——工具不会编造任何节点类名。
+节点目录在运行时从 Native ComfyUI `/object_info` 获取（TTL 缓存：object_info 10 分钟 / models folder 5 分钟 / features 30 分钟）。`/models` 按 ComfyUI Server 语义返回 **folder 名称列表**（`["checkpoints", "loras", ...]`），具体模型文件按需 `GET /models/{folder}` 懒加载并独立 TTL 缓存；单个 folder 404 是合法降级，不影响其余能力。查找节点失败会强制刷新一次，仍不存在则返回 `NODE_NOT_FOUND`——工具不会编造任何节点类名。
 
-### 4. 浏览器兜底（host 模式）
+### 4. 快照语义（baseline / candidate）
 
-当操作目标属于 API Format 不存在的前端字段（如 `control_after_generate`、分组信息），工具不伪造 API 调用，而是：保存 workflow 快照 → 返回结构化请求（语义 goal、DOM→CDP→vision 策略、RunningHub 域名 allowlist、fetch+diff 后置条件），由 Codex / Zcode 等宿主智能体用自己的浏览器能力执行。
+- **baseline snapshot** = mutation / run 之前的**远端当前状态**（rollback 依据）。full workflow run 与浏览器兜底前必须保存，且必须来自远端 fetch——Agent 本地修改过的 graph 不可作为 rollback baseline；
+- **candidate snapshot** = 即将提交执行的候选状态（full workflow run 时一并保存，便于审计对比）。
 
-### 5. 安全设计
+### 5. 浏览器兜底（host 模式）
+
+当操作目标属于 API Format 不存在的前端字段（如 `control_after_generate`、分组信息），工具不伪造 API 调用，而是：fetch 远端并保存 **baseline** 快照 → 返回结构化请求（语义 goal、DOM→CDP→vision 策略、RunningHub 域名 allowlist、fetch+diff 后置条件），由 Codex / Zcode 等宿主智能体用自己的浏览器能力执行。
+
+### 6. 安全设计
 
 - API key 只从环境变量读取，`.env` 不入库；日志双层脱敏（字段名规则 + 字符串规则，覆盖 key 明文、`/proxy/<key>`、Bearer、signed URL）
 - `create task` 与 `upload` 默认禁止自动重试（防重复收费 / 重复上传）；仅幂等读操作自动重试（≤3 次，408/429/5xx/网络层）
+- **nodeInfoList 护栏下沉到 Service boundary**：任何入口（工具 / CLI `--set` / MCP 直接 overrides）携带连接形态值（`["nodeId", index]`）→ `UNSUPPORTED`（要求走 full workflow JSON）；前端-only 字段 → `REQUIRES_BROWSER`
+- **graph key/id invariant**：`graph.nodes[key].id === key` 在所有边界（parse / wire / serialize）强校验，不一致直接 `INVALID_WORKFLOW`，绝不静默纠正或覆盖
+- `doctor` 语义诚实：`configured=true` 仅表示 key 已配置，`authenticationChecked=false` 表示未做（也未伪称）服务端验证
+- 任务轮询遇到未确认业务码时最多连续容忍 2 次，超过即 `TASK_FAILED(UNKNOWN_API_STATE)`，不会无限轮询到 timeout
 - 上传返回的 `fileName` 是加载节点相对路径，绝不拼接为公共 URL（官方明确上传接口不是图床）
-- full workflow run 与浏览器兜底前强制快照，失败即中止
+- baseline 快照强制先于 full workflow run 与浏览器兜底，保存失败即中止
 
 ## 构建、运行与部署
 
 ```bash
 npm run build     # tsc 编译到 dist/（dist/cli/main.js 为 bin 入口）
-npm test          # vitest 全量测试（123 个，全部 mock，无需真实 key）
+npm test          # vitest 全量测试（165 个，全部 mock，无需真实 key）
 npm run dev       # 开发模式 CLI（tsx 直跑 TS 源码）
 npm run mcp       # 启动 MCP stdio server（可直接被 MCP 客户端挂载）
 npm run lint      # eslint
@@ -284,11 +295,13 @@ npm run lint && npm test && npm run build   # 三项全部通过
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6.svg)
 ![MCP](https://img.shields.io/badge/MCP-stdio-5E5CE6.svg)
-![Tests](https://img.shields.io/badge/tests-123%20passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-165%20passed-brightgreen.svg)
 
 > An agent-neutral control layer for RunningHub / ComfyUI workflows — lets coding agents operate RunningHub with **workflow semantics** instead of mouse coordinates.
 
 **rh-agent-bridge** is a local tool for coding agents (Codex, Zcode, or any MCP / CLI caller). It exposes a stable set of structured tools on top of the RunningHub official OpenAPI and Native ComfyUI endpoints, and only returns a structured browser-fallback request (executed by the host agent) when an operation genuinely cannot be expressed via API.
+
+> **Current status: P0/MVP + P0.1 Hardening** (v0.1.1) — P0.1 fixed the `/models` contract, connection-type validation, baseline-snapshot semantics, nodeInfoList bypass, graph key/id invariant and other safety/correctness issues.
 
 ## Overview
 
@@ -301,8 +314,8 @@ This project models a RunningHub workflow as a structured graph (WorkflowGraph) 
 - **API-first**: RunningHub official OpenAPI first (task creation, output polling, resource upload, workflow fetch), then Native ComfyUI (`/proxy/<key>`); the browser is only a last resort
 - **Structured graph engine**: bidirectional API Format JSON ⇄ WorkflowGraph; node query, immutable patch (set_input / add_node / remove_node / connect / disconnect), graph diff, cycle detection
 - **Parameter vs topology routing**: value-only changes auto-generate an official `nodeInfoList`; topology/connection changes automatically switch to full-workflow JSON submission (official docs advise against changing connections via nodeInfoList)
-- **Layered static validation**: Level 1 structural references/cycles → Level 2 node & input-type checks against `/object_info` → Level 3 model-name checks; server-side `promptTips` parsed into a structured result
-- **Native capability probe**: runtime feature-detection of `/features`, `/object_info`, `/models` with graceful degradation — never breaks the OpenAPI path
+- **Layered static validation**: Level 1 structural references/cycles → Level 2 node, input and **connection-type** checks against `/object_info` (output-index overflow, connections into primitive fields, MODEL→IMAGE mismatches) → Level 3 model-name checks (priority: object_info COMBO options → `/models/{folder}` → field-name fallback); server-side `promptTips` parsed into a structured result
+- **Native capability probe**: runtime feature-detection of `/features`, `/object_info`, `/models` (folder list); model files lazily fetched via `GET /models/{folder}`; graceful degradation never breaks the OpenAPI path, and per-endpoint details (endpoint + status) are exposed to the agent
 - **Safe fallback**: browser fallback returns a structured request (semantic goal + domain allowlist + mandatory pre-snapshot) for the host agent to execute with its own browser capabilities
 - **One source, two surfaces**: the CLI (`--json` agent mode) and the MCP server share the same service layer with 13 mirrored tools
 - **Redacted logging**: API key literals, `/proxy/<key>`, Bearer tokens and signed URLs are always masked; `create task` and `upload` never auto-retry (no double billing)
@@ -344,7 +357,7 @@ See [Usage](#usage) for how to run them.
 git clone https://github.com/yangxijia111/rh-agent-bridge.git
 cd rh-agent-bridge
 npm install
-npm test        # 123 mock-based tests, no real key required
+npm test        # 165 mock-based tests, no real key required
 ```
 
 Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored — never commit it):
@@ -453,7 +466,7 @@ rh-agent-bridge/
 │   ├── tools/             13 tools + registry (zod input schemas)
 │   ├── cli/               commander CLI (--json agent mode)
 │   └── mcp/               MCP stdio server
-├── tests/                 123 tests + workflow fixtures
+├── tests/                 165 tests + workflow fixtures + API contract fixtures
 ├── examples/              Demo A/B scripts + Demo C guide
 ├── .env.example           environment template
 └── package.json / tsconfig.json / vitest.config.ts / eslint.config.js
@@ -480,30 +493,39 @@ If a connection change is ever routed to `nodeInfoList`, the tool throws `UNSUPP
 | Level | Checks | Depends on |
 |---|---|---|
 | Level 1 | reference existence, self-reference, outputIndex, cycles | none |
-| Level 2 | node-class existence, required inputs, type/enum/range | `/object_info` (skipped if unavailable) |
-| Level 3 | checkpoint / lora / vae model names | `/models` (skipped if unavailable) |
+| Level 2 | node-class existence, required inputs, type/enum/range, plus **five-point connection validation** (source/target existence, output-index overflow, connections into primitive fields `CONNECTION_NOT_ALLOWED`, type mismatches `CONNECTION_TYPE_MISMATCH`; unknown custom datatypes degrade to warnings to avoid false positives) | `/object_info` (skipped if unavailable) |
+| Level 3 | model names, priority: object_info COMBO options for the field → `GET /models/{folder}` (checkpoints/loras/vae/upscale_models) → field-name fallback | any of the above (skipped if unavailable) |
 | Server-side | `promptTips` → structured valid / nodeErrors / outputsToExecute | task-creation response |
 
 ### 3. Node catalog & anti-hallucination
 
-The node catalog is fetched at runtime from Native ComfyUI `/object_info` (TTL cache: object_info 10 min / models 5 min / features 30 min). A failed lookup forces one refresh; if the class still does not exist the tool returns `NODE_NOT_FOUND` — it never invents a class name.
+The node catalog is fetched at runtime from Native ComfyUI `/object_info` (TTL cache: object_info 10 min / models folders 5 min / features 30 min). `/models` follows ComfyUI Server semantics and returns a **list of folder names** (`["checkpoints", "loras", ...]`); actual model files are lazily fetched per folder via `GET /models/{folder}` with independent TTL caching — a missing folder is a legal degradation. A failed node lookup forces one refresh; if the class still does not exist the tool returns `NODE_NOT_FOUND` — it never invents a class name.
 
-### 4. Browser fallback (host mode)
+### 4. Snapshot semantics (baseline / candidate)
 
-When an operation targets a frontend-only field absent from API Format (e.g. `control_after_generate`, grouping), the tool does not fake an API call. Instead it saves a workflow snapshot, then returns a structured request (semantic goal, DOM→CDP→vision strategy, RunningHub domain allowlist, fetch+diff postconditions) for the host agent (Codex / Zcode / …) to execute with its own browser capabilities.
+- **baseline snapshot** = the **remote current state** before a mutation/run (the rollback source). Mandatory before full-workflow runs and browser fallbacks, and must come from a remote fetch — a locally modified agent graph is never a valid rollback baseline;
+- **candidate snapshot** = the state intended for execution (saved alongside full-workflow runs for audit/diff).
 
-### 5. Security design
+### 5. Browser fallback (host mode)
+
+When an operation targets a frontend-only field absent from API Format (e.g. `control_after_generate`, grouping), the tool does not fake an API call. Instead it fetches the remote workflow, saves the **baseline** snapshot, then returns a structured request (semantic goal, DOM→CDP→vision strategy, RunningHub domain allowlist, fetch+diff postconditions) for the host agent (Codex / Zcode / …) to execute with its own browser capabilities.
+
+### 6. Security design
 
 - The API key is read only from environment variables; `.env` never enters git; logging is double-layer redacted (field-name rules + string rules covering key literals, `/proxy/<key>`, Bearer tokens, signed URLs)
 - `create task` and `upload` never auto-retry (no double billing / duplicate uploads); only idempotent reads retry automatically (≤3 times, 408/429/5xx/network)
+- **nodeInfoList guardrails enforced at the Service boundary**: any entry point (tool / CLI `--set` / direct MCP overrides) carrying a connection-like value (`["nodeId", index]`) → `UNSUPPORTED` (full workflow JSON required); frontend-only fields → `REQUIRES_BROWSER`
+- **graph key/id invariant**: `graph.nodes[key].id === key` is strictly enforced at every boundary (parse / wire / serialize) — mismatches raise `INVALID_WORKFLOW`, never silently corrected or overwritten
+- **honest doctor semantics**: `configured=true` only means the key is present; `authenticationChecked=false` means no server-side verification was (or is claimed to have been) performed
+- task polling tolerates at most 2 consecutive unrecognized business codes, then fails with `TASK_FAILED(UNKNOWN_API_STATE)` instead of polling until timeout
 - The uploaded `fileName` is a relative path for load nodes and is never concatenated into a public URL (the official docs state the upload endpoint is not an image host)
-- Snapshots are mandatory before full-workflow runs and browser fallbacks; failure aborts the operation
+- baseline snapshots are mandatory before full-workflow runs and browser fallbacks; failure aborts the operation
 
 ## Build & Run
 
 ```bash
 npm run build     # tsc → dist/ (dist/cli/main.js is the bin entry)
-npm test          # full vitest suite (123 mock-based tests, no real key needed)
+npm test          # full vitest suite (165 mock-based tests, no real key needed)
 npm run dev       # dev-mode CLI (tsx runs TS directly)
 npm run mcp       # start the MCP stdio server (mountable by any MCP client)
 npm run lint      # eslint

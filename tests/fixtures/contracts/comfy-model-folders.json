@@ -1,0 +1,14 @@
+[
+  "checkpoints",
+  "clip",
+  "clip_vision",
+  "configs",
+  "controlnet",
+  "embeddings",
+  "loras",
+  "photomaker",
+  "style_models",
+  "upscale_models",
+  "vae",
+  "vae_approx"
+]

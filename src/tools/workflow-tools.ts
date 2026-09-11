@@ -79,26 +79,34 @@ export async function workflowPatchTool(
   if (input.graph === undefined && input.workflowId === undefined) {
     throw new RhError("CONFIG", "provide either workflowId or graph");
   }
-  const baseGraph =
-    input.graph !== undefined
-      ? graphFromUnknown(input.graph)
-      : (await ctx.workflow.fetch(input.workflowId!)).graph;
 
-  // 前端-only 字段：不调用 API，基于本地 graph 快照生成 browser fallback 建议（AT-401）
+  // 前端-only 字段：不伪造 API 写操作（AT-401），返回 browser fallback 建议。
+  // P0.1-03：baseline 必须是远端当前态 → 必须 fetch remote（本地 graph 不可作 rollback 依据）。
   const frontendOnly = input.operations.filter(
     (op): op is SetInputOperationInput =>
       op.type === "set_input" && ctx.browserFallback.isFrontendOnlyField(op.field),
   );
   if (frontendOnly.length > 0) {
-    const fallback = await ctx.browserFallback.request({
-      workflowId: input.workflowId ?? "unknown",
+    if (input.workflowId === undefined) {
+      throw new RhError(
+        "CONFIG",
+        "frontend-only field patch requires workflowId so the remote baseline can be snapshotted",
+      );
+    }
+    const remoteRaw = await ctx.rh.workflow.getJsonApiFormat(input.workflowId);
+    return ctx.browserFallback.request({
+      workflowId: input.workflowId,
       goal: `Set frontend-only field(s) ${frontendOnly.map((op) => `${op.nodeId}.${op.field}`).join(", ")} in the RunningHub workflow editor`,
       reason: "FRONTEND_ONLY_FIELD",
       context: { operations: frontendOnly },
-      graph: baseGraph,
+      rawApiFormat: remoteRaw,
     });
-    return fallback;
   }
+
+  const baseGraph =
+    input.graph !== undefined
+      ? graphFromUnknown(input.graph)
+      : (await ctx.workflow.fetch(input.workflowId!)).graph;
 
   const patched = await ctx.workflow.patch(
     { graph: baseGraph, operations: input.operations },

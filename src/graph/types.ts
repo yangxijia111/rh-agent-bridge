@@ -86,6 +86,8 @@ export interface ValidationIssue {
   nodeId?: string;
   field?: string;
   message: string;
+  /** 结构化详情（如连接类型不匹配的 sourceType/targetType，P0.1-02） */
+  details?: Record<string, unknown>;
 }
 
 export interface ValidationResult {

@@ -1,7 +1,8 @@
 /**
- * Graph mutation（02_ARCHITECTURE.md §7、04 §8）。
+ * Graph mutation（02_ARCHITECTURE.md §7、04 §8、P0.1-09）。
  *
- * 所有 mutation 不可变：返回新 graph，原对象不动。
+ * 所有 mutation 不可变：返回新 graph，原对象（含嵌套结构）不动——
+ * 通过 structuredClone 深拷贝实现，而不是浅复制字段。
  * add_node 的 id 分配：max(纯数字 node ids) + 1；存在非数字 ID 时仍生成未占用的数字字符串。
  * remove_node 有下游引用时失败 NODE_IN_USE（第一版不支持 cascade）。
  */
@@ -59,7 +60,7 @@ function applyOperation(
       }
       graph.nodes[op.nodeId] = {
         ...node,
-        inputs: { ...node.inputs, [op.field]: structuredCloneable(op.value) },
+        inputs: { ...node.inputs, [op.field]: cloneValue(op.value) },
       };
       return graph;
     }
@@ -81,7 +82,8 @@ function applyOperation(
         id: nodeId,
         classType: op.classType,
         ...(op.title !== undefined ? { title: op.title } : {}),
-        inputs: { ...(op.inputs ?? {}) },
+        // P0.1-09：operation 传入的 inputs 深拷贝，与调用方解除引用共享
+        inputs: cloneValue(op.inputs ?? {}) as Record<string, unknown>,
       };
       graph.nodes[nodeId] = node;
       assignedNodeIds[`#${opIndex}`] = nodeId;
@@ -192,16 +194,17 @@ function omitInput(node: WorkflowNode, field: string): WorkflowNode {
   return { ...node, inputs };
 }
 
+/**
+ * P0.1-09：真正深拷贝。嵌套 object/array 与调用方彻底解除引用共享。
+ * graph 输入值均为 JSON 可序列化结构，structuredClone 安全（Node ≥ 17）。
+ */
 function cloneGraph(graph: WorkflowGraph): WorkflowGraph {
-  const nodes: Record<string, WorkflowNode> = {};
-  for (const [id, node] of Object.entries(graph.nodes)) {
-    nodes[id] = {
-      ...node,
-      inputs: { ...node.inputs },
-      ...(node.rawMeta ? { rawMeta: { ...node.rawMeta } } : {}),
-    };
-  }
-  return { nodes };
+  return structuredClone(graph);
+}
+
+/** 写入 set_input 的值同样深拷贝，调用方后续修改不影响已 patch 的 graph */
+function cloneValue(value: unknown): unknown {
+  return value === undefined ? null : structuredClone(value);
 }
 
 function isConnectionLike(value: unknown): boolean {
@@ -211,10 +214,6 @@ function isConnectionLike(value: unknown): boolean {
     typeof value[0] === "string" &&
     Number.isInteger(value[1])
   );
-}
-
-function structuredCloneable(value: unknown): unknown {
-  return value === undefined ? null : value;
 }
 
 function describeOperation(op: GraphOperation): string {

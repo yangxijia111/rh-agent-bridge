@@ -8,12 +8,28 @@ import { buildMcpServer } from "../../src/mcp/server.js";
 import { createBridgeContext } from "../../src/services/context.js";
 import { TOOL_REGISTRY } from "../../src/tools/registry.js";
 import { parseApiFormat } from "../../src/graph/parse.js";
+import type { FetchLike } from "../../src/clients/runninghub/client.js";
 import { graphToWire } from "./helpers.js";
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 
-// 测试用假 key（仅让 doctor 报 authenticated=true；非真实凭据，不触发网络请求）
+// 测试用假 key（仅让 doctor 报 configured=true；非真实凭据）
 const MCP_TEST_KEY = "test-key-for-mcp";
+
+/** mock fetch：getJsonApiFormat 返回远端 seed=1（P0.1-03 基线用），create 被拦截保护挡在前面 */
+const remoteFetchMock: FetchLike = async (url) => {
+  if (url.includes("/api/openapi/getJsonApiFormat")) {
+    const remote = {
+      "3": { class_type: "KSampler", inputs: { seed: 1 } },
+      "9": { class_type: "SaveImage", inputs: { filename_prefix: "x", images: ["3", 0] } },
+    };
+    return new Response(
+      JSON.stringify({ code: 0, msg: "SUCCESS", data: { prompt: JSON.stringify(remote) } }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  return new Response(JSON.stringify({ code: 404, msg: "not found" }), { status: 404 });
+};
 
 let client: Client;
 let cleanup: (() => Promise<void>) | undefined;
@@ -23,7 +39,7 @@ beforeAll(async () => {
   const env = { ...process.env } as Record<string, string | undefined>;
   env.RUNNINGHUB_API_KEY = MCP_TEST_KEY;
   env.RH_LOG_LEVEL = "silent";
-  const ctx = createBridgeContext(env);
+  const ctx = createBridgeContext(env, { fetchImpl: remoteFetchMock });
   const server = buildMcpServer(ctx);
   await server.connect(serverTransport);
   client = new Client({ name: "test-client", version: "0.0.1" });
@@ -80,15 +96,19 @@ describe("MCP server（M6）", () => {
     ]);
   });
 
-  it("rh_doctor（probeNative=false）→ 结构化体检结果", async () => {
+  it("rh_doctor（probeNative=false）→ 结构化体检结果（P0.1-07：configured 而非 authenticated）", async () => {
     const res = await client.callTool({
       name: "rh_doctor",
       arguments: { probeNative: false },
     });
     if (res.isError) throw new Error("unexpected error");
-    const parsed = parseToolResult<{ ok: boolean; runningHub: { authenticated: boolean } }>(res);
+    const parsed = parseToolResult<{
+      ok: boolean;
+      runningHub: { configured: boolean; authenticationChecked: boolean };
+    }>(res);
     expect(parsed.ok).toBe(true);
-    expect(parsed.runningHub.authenticated).toBe(true);
+    expect(parsed.runningHub.configured).toBe(true);
+    expect(parsed.runningHub.authenticationChecked).toBe(false);
   });
 
   it("输入 schema 不合法 → isError 且说明校验原因（SDK 在 handler 前校验 shape）", async () => {
@@ -101,7 +121,7 @@ describe("MCP server（M6）", () => {
     expect(text).toMatch(/validation|invalid/i);
   });
 
-  it("前端-only 字段 → 返回 browser fallback 请求（AT-401 MCP 路径）", async () => {
+  it("前端-only 字段 → 返回 browser fallback 请求（AT-401 MCP 路径，baseline 来自远端 fetch）", async () => {
     const graph = parseApiFormat(
       JSON.parse(readFileSync(path.join(FIXTURES, "basic-sdxl.json"), "utf-8")),
     );
@@ -132,5 +152,38 @@ describe("MCP server（M6）", () => {
     expect(parsed.strategy).toEqual(["DOM", "CDP", "vision"]);
     expect(parsed.domainAllowlist).toContain("runninghub.ai");
     expect(parsed.preconditions.join(" ")).toMatch(/snapshot/i);
+    // P0.1-03：baseline 来自远端 fetch（seed=1），不是本地传入的 graph
+    const snapshotPath = parsed.preconditions[0]?.match(/at (\S+)/)?.[1];
+    expect(snapshotPath).toBeDefined();
+    expect(snapshotPath).toMatch(/\.baseline\./);
+    const content = JSON.parse(readFileSync(snapshotPath as string, "utf-8"));
+    expect(content["3"].inputs.seed).toBe(1);
+  });
+
+  it("P0.1-04：MCP 直接 overrides 连接值被拦截（UNSUPPORTED）", async () => {
+    const res = await client.callTool({
+      name: "rh_workflow_run",
+      arguments: {
+        workflowId: "wf-x",
+        overrides: [{ nodeId: "3", fieldName: "model", fieldValue: ["42", 0] }],
+      },
+    });
+    expect(res.isError).toBe(true);
+    const parsed = parseToolResult<{ error: { code: string; message: string } }>(res);
+    expect(parsed.error.code).toBe("UNSUPPORTED");
+    expect(parsed.error.message).toMatch(/full workflow JSON/);
+  });
+
+  it("P0.1-04：MCP 直接 overrides 前端-only 字段被拦截（REQUIRES_BROWSER）", async () => {
+    const res = await client.callTool({
+      name: "rh_workflow_run",
+      arguments: {
+        workflowId: "wf-x",
+        overrides: [{ nodeId: "3", fieldName: "control_after_generate", fieldValue: "fixed" }],
+      },
+    });
+    expect(res.isError).toBe(true);
+    const parsed = parseToolResult<{ error: { code: string } }>(res);
+    expect(parsed.error.code).toBe("REQUIRES_BROWSER");
   });
 });

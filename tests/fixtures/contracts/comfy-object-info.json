@@ -1,0 +1,93 @@
+{
+  "KSampler": {
+    "input": {
+      "required": {
+        "seed": ["INT", { "default": 0, "min": 0, "max": 18446744073709551615 }],
+        "steps": ["INT", { "default": 20, "min": 1, "max": 100 }],
+        "cfg": ["FLOAT", { "default": 8 }],
+        "sampler_name": [["euler", "dpmpp_2m", "ddim"]],
+        "scheduler": [["normal", "karras", "sgm_uniform", "simple", "ddim_uniform"]],
+        "denoise": ["FLOAT", { "default": 1 }],
+        "model": ["MODEL", { "tooltip": "The model to be used" }],
+        "positive": ["CONDITIONING"],
+        "negative": ["CONDITIONING"],
+        "latent_image": ["LATENT"]
+      }
+    },
+    "output": ["LATENT"],
+    "output_name": ["latent"],
+    "name": "KSampler",
+    "display_name": "KSampler",
+    "description": "anonymous sample",
+    "category": "sampling",
+    "output_node": false
+  },
+  "CheckpointLoaderSimple": {
+    "input": {
+      "required": {
+        "ckpt_name": [["model_a.safetensors", "model_b.safetensors"]]
+      }
+    },
+    "output": ["MODEL", "CLIP", "VAE"],
+    "output_name": ["MODEL", "CLIP", "VAE"],
+    "name": "CheckpointLoaderSimple",
+    "display_name": "Load Checkpoint",
+    "category": "loaders",
+    "output_node": false
+  },
+  "VAEDecode": {
+    "input": {
+      "required": {
+        "samples": ["LATENT"],
+        "vae": ["VAE"]
+      }
+    },
+    "output": ["IMAGE"],
+    "name": "VAEDecode",
+    "display_name": "VAE Decode",
+    "category": "latent",
+    "output_node": false
+  },
+  "SaveImage": {
+    "input": {
+      "required": {
+        "filename_prefix": ["STRING", { "default": "ComfyUI" }],
+        "images": ["IMAGE"]
+      }
+    },
+    "output": [],
+    "name": "SaveImage",
+    "display_name": "Save Image",
+    "category": "image",
+    "output_node": true
+  },
+  "ImageUpscaleWithModel": {
+    "input": {
+      "required": {
+        "upscale_model": ["UPSCALE_MODEL"],
+        "image": ["IMAGE"]
+      }
+    },
+    "output": ["IMAGE"],
+    "name": "ImageUpscaleWithModel",
+    "display_name": "Upscale Image (using Model)",
+    "category": "image/upscaling",
+    "output_node": false
+  },
+  "LoraLoader": {
+    "input": {
+      "required": {
+        "lora_name": [["lora_a.safetensors", "lora_b.safetensors"]],
+        "strength_model": ["FLOAT", { "default": 1 }],
+        "strength_clip": ["FLOAT", { "default": 1 }],
+        "model": ["MODEL"],
+        "clip": ["CLIP"]
+      }
+    },
+    "output": ["MODEL", "CLIP"],
+    "name": "LoraLoader",
+    "display_name": "Load LoRA",
+    "category": "loaders",
+    "output_node": false
+  }
+}

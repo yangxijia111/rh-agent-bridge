@@ -1,0 +1,11 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "taskId": "1910246754753896450",
+    "taskStatus": "QUEUED",
+    "clientId": "e825290b08ca2015b8f62f0bbdb5f5f6",
+    "netWssUrl": null,
+    "promptTips": "{\"result\":true,\"error\":null,\"outputs_to_execute\":[\"9\"],\"node_errors\":{}}"
+  }
+}

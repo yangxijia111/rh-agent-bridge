@@ -1,0 +1,15 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": [
+    {
+      "fileUrl": "https://runninghub-cdn.example.invalid/output/anonymous.png",
+      "fileType": "png",
+      "taskCostTime": "83",
+      "nodeId": "12",
+      "thirdPartyConsumeMoney": null,
+      "consumeMoney": null,
+      "consumeCoins": "17"
+    }
+  ]
+}
