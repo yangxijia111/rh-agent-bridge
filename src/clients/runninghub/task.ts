@@ -60,6 +60,8 @@ export interface TaskOutputsResult {
   msg?: string;
   /** UNKNOWN 态对应的业务码（P0.1-08：wait 层据此计数升级） */
   apiCode?: number;
+  /** P0.1.1：仅展示提示（如 msg 含 queue/running），不参与状态机判定 */
+  displayHint?: "QUEUED" | "RUNNING";
 }
 
 /** outputs 接口的业务状态码（官方 2026-09） */
@@ -147,14 +149,17 @@ export class TaskApi {
         if (TERMINAL_API_CODES.has(err.apiCode)) {
           throw err; // 801/802/813 等终态：立即失败
         }
-        // P0.1-08：未知业务码不再无限当作排队；标记 UNKNOWN（带 apiCode），
-        // 由 TaskService.wait 的 unknownBusinessCodeCount 决定是否升级失败。
-        // 字符串推断（msg 含 queue/running）仅作展示态 fallback。
+        // P0.1.1 Fix 1：未知业务码一律标记 UNKNOWN（带 apiCode），由 TaskService.wait
+        // 的 unknownBusinessCodeCount 决定是否升级 UNKNOWN_API_STATE。
+        // 业务码判定优先于字符串推断——msg 含 queue/running 不得把 UNKNOWN 改写成
+        // QUEUED/RUNNING（否则 unknown counter 被重置，可能轮询到超时）。
+        // 字符串推断仅保留为展示提示字段 displayHint。
         return {
-          state: inferQueued(err) ? "QUEUED" : "UNKNOWN",
+          state: "UNKNOWN",
           outputs: [],
           msg: err.message,
           apiCode: err.apiCode,
+          ...(inferQueued(err) ? { displayHint: "QUEUED" } : {}),
         };
       }
       throw err;
@@ -205,9 +210,10 @@ function mapOutputsSuccess(data: unknown): TaskOutputsResult {
 }
 
 function inferQueued(err: RhError): boolean {
-  // P0.1-08：字符串推断仅作 UNKNOWN→QUEUED 的展示态 fallback，不作为主判定
+  // P0.1.1：仅作 displayHint 展示辅助，不参与状态机判定。
+  // 词边界匹配避免把 "RunningHub API error ..." 中的 "runninghub" 误判为 running。
   const msg = err.message.toLowerCase();
-  return msg.includes("queue") || msg.includes("queued") || msg.includes("running");
+  return /\b(queued|queue|running)\b/.test(msg);
 }
 
 /**

@@ -259,6 +259,36 @@ describe("TaskService.wait（FR-07 轮询）", () => {
     expect(result.state).toBe("SUCCEEDED");
   });
 
+  it("P0.1.1 Case B：msg 含 queued 的未知码（displayHint=QUEUED）仍升级 UNKNOWN_API_STATE，不会轮询到超时", async () => {
+    // 真实路径模拟：client 对未知 999+queued msg 返回 UNKNOWN（而非被改写成 QUEUED）
+    const { service } = makeTaskService([
+      {
+        state: "UNKNOWN",
+        outputs: [],
+        msg: "task queued, please wait",
+        apiCode: 999,
+        displayHint: "QUEUED",
+      },
+    ]);
+    await expect(
+      service.wait("t", { timeoutMs: 10 ** 9, sleep: noSleep, now: fakeClock }),
+    ).rejects.toMatchObject({
+      code: "TASK_FAILED",
+      details: { reason: "UNKNOWN_API_STATE", apiCode: 999, msg: "task queued, please wait" },
+    });
+  });
+
+  it("P0.1.1 Case C：已知 804 → RUNNING 继续轮询直至成功（修复未破坏）", async () => {
+    const { service, state } = makeTaskService([
+      { state: "RUNNING", outputs: [], msg: "APIKEY_TASK_IS_RUNNING" },
+      { state: "RUNNING", outputs: [], msg: "APIKEY_TASK_IS_RUNNING" },
+      { state: "SUCCEEDED", outputs: [{ url: "https://cdn/ok.png", type: "png" }] },
+    ]);
+    const result = await service.wait("t", { sleep: noSleep, now: fakeClock, timeoutMs: 10 ** 9 });
+    expect(result.state).toBe("SUCCEEDED");
+    expect(state.outputsCalls).toBe(3);
+  });
+
   it("abort signal → RhError(ABORTED)", async () => {
     const { service } = makeTaskService([{ state: "RUNNING", outputs: [] }]);
     const controller = new AbortController();

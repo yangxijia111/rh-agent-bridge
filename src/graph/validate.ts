@@ -218,8 +218,8 @@ function checkInputValue(
 ): void {
   const connected = isConnectionValue(value);
   if (connected) {
-    // 连接值的合法性由 validateConnectionsAgainstSchema 统一判定（P0.1-02），
-    // 这里只拦截“连接型字段的常量”反例；连接进入 primitive 字段在连接校验中报 CONNECTION_NOT_ALLOWED
+    // 连接值的合法性由 validateConnectionsAgainstSchema 统一判定（P0.1-02/P0.1.1），
+    // 这里只拦截“连接型字段的常量”反例
     return;
   }
   if (isConnectionTypeSpec(spec)) {
@@ -327,13 +327,14 @@ function checkInputValue(
 /* ---------------- P0.1-02：连接 schema 校验 ---------------- */
 
 /**
- * 有 object_info schema 时对每条连接做五要素校验：
- *  A. fromNode 存在（Level 1 已查，这里以 schema 路径再确认，保持函数自洽）
+ * 有 object_info schema 时对每条连接做校验：
+ *  A. fromNode 存在（Level 1 通常已报 MISSING_UPSTREAM_NODE；这里以 schema 路径再确认，保持函数自洽）
  *  B. toNode 存在
  *  C. outputIndex < 上游 outputTypes.length → 否则 OUTPUT_INDEX_OUT_OF_RANGE
- *  D. 下游 input 必须是连接型（INT/STRING/... 不可接收连接）→ CONNECTION_NOT_ALLOWED
- *  E. 源输出类型与目标输入类型兼容 → 否则 CONNECTION_TYPE_MISMATCH
- *     涉及未知 custom datatype 时降级 warning，优先于误报 error（P0.1-02 要求）。
+ *  D+E. 统一兼容性路径（P0.1.1）：
+ *     sourceType === targetType → PASS（含 primitive 同类型，ComfyUI widget-convert 合法）
+ *     双方类型明确且不同 → CONNECTION_TYPE_MISMATCH
+ *     COMBO 的 socket 类型 / 未知 custom datatype 无法可靠判断 → UNKNOWN_TYPE_COMPAT warning
  */
 export function validateConnectionsAgainstSchema(
   graph: WorkflowGraph,
@@ -367,26 +368,15 @@ export function validateConnectionsAgainstSchema(
     const targetSpec: NodeInputSpec | undefined =
       toDef.inputRequired[conn.inputName] ?? toDef.inputOptional[conn.inputName];
 
-    // D. 下游 input 必须是连接型
-    if (targetSpec && !isConnectionTypeSpec(targetSpec)) {
-      issues.push({
-        severity: "error",
-        code: "CONNECTION_NOT_ALLOWED",
-        nodeId: conn.toNode,
-        field: conn.inputName,
-        message: `${toNode.classType}.${conn.inputName} is a ${targetSpec.type} primitive input and cannot receive a connection`,
-      });
-      continue;
-    }
-
-    // E. 类型兼容
+    // D+E 统一兼容性路径（P0.1.1 Fix 2）：
+    // primitive/widget 类型输入同样允许由连接提供（ComfyUI widget-convert），
+    // 不再因“目标是 primitive”一刀切拒绝；统一按 sourceType/targetType 判定：
+    //   相同 → PASS；双方类型明确且不同 → mismatch error；无法可靠判断 → warning。
     const sourceType = fromDef?.outputTypes[conn.outputIndex];
     const targetType = targetSpec?.type;
     if (sourceType === undefined || targetType === undefined) continue;
-    if (sourceType === targetType) continue;
+    if (sourceType === targetType) continue; // 含 INT→INT / STRING→STRING 等 widget-convert 合法路径
 
-    const sourceKnown = KNOWN_CONNECTION_TYPES.has(sourceType) || PRIMITIVE_TYPES.has(sourceType);
-    const targetKnown = KNOWN_CONNECTION_TYPES.has(targetType) || PRIMITIVE_TYPES.has(targetType);
     const details = {
       fromNode: conn.fromNode,
       outputIndex: conn.outputIndex,
@@ -395,6 +385,23 @@ export function validateConnectionsAgainstSchema(
       field: conn.inputName,
       targetType,
     };
+
+    // COMBO 的真实 socket 类型当前 adapter 无法可靠判断（forceInput 等 metadata 未建模）→
+    // warning，不得直接 error（完整建模留到 P0.2）
+    if (sourceType === "COMBO" || targetType === "COMBO") {
+      issues.push({
+        severity: "warning",
+        code: "UNKNOWN_TYPE_COMPAT",
+        nodeId: conn.toNode,
+        field: conn.inputName,
+        message: `connection ${conn.fromNode}[${conn.outputIndex}] (${sourceType}) → ${conn.toNode}.${conn.inputName} (${targetType}) involves a COMBO whose socket type cannot be determined; compatibility not verified`,
+        details,
+      });
+      continue;
+    }
+
+    const sourceKnown = KNOWN_CONNECTION_TYPES.has(sourceType) || PRIMITIVE_TYPES.has(sourceType);
+    const targetKnown = KNOWN_CONNECTION_TYPES.has(targetType) || PRIMITIVE_TYPES.has(targetType);
     if (sourceKnown && targetKnown) {
       issues.push({
         severity: "error",
