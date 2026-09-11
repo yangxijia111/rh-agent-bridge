@@ -58,6 +58,8 @@ export interface TaskOutputsResult {
   failedReason?: Record<string, unknown>;
   /** 非成功态时的原始提示 */
   msg?: string;
+  /** UNKNOWN 态对应的业务码（P0.1-08：wait 层据此计数升级） */
+  apiCode?: number;
 }
 
 /** outputs 接口的业务状态码（官方 2026-09） */
@@ -68,6 +70,12 @@ const CODE_TASK_NOT_EXIST = 801;
 const CODE_TASK_EXPIRE = 802;
 const CODE_TASK_CANCEL = 813;
 const TERMINAL_API_CODES = new Set([CODE_TASK_NOT_EXIST, CODE_TASK_EXPIRE, CODE_TASK_CANCEL]);
+/**
+ * P0.1-08：已确认的 transient 业务码（继续轮询）。
+ * 目前官方文档明确枚举的只有 804（运行中）；
+ * 排队态尚未见到官方明确 code，先只含 804，新确认后加入。
+ */
+const TRANSIENT_API_CODES = new Set([CODE_RUNNING]);
 
 export class TaskApi {
   constructor(private readonly ctx: RequestContext) {}
@@ -125,7 +133,9 @@ export class TaskApi {
       return mapOutputsSuccess(data);
     } catch (err) {
       if (err instanceof RhApiError) {
-        if (err.apiCode === CODE_RUNNING) return { state: "RUNNING", outputs: [], msg: err.message };
+        if (TRANSIENT_API_CODES.has(err.apiCode)) {
+          return { state: "RUNNING", outputs: [], msg: err.message };
+        }
         if (err.apiCode === CODE_STATUS_ERROR) {
           const rawFailed = err.details?.data as Record<string, unknown> | undefined;
           const failedReason =
@@ -134,10 +144,18 @@ export class TaskApi {
               : undefined;
           return { state: "FAILED", outputs: [], msg: err.message, failedReason };
         }
-        // 排队等未明确枚举的状态：保持可轮询
-        if (!TERMINAL_API_CODES.has(err.apiCode)) {
-          return { state: inferQueued(err) ? "QUEUED" : "UNKNOWN", outputs: [], msg: err.message };
+        if (TERMINAL_API_CODES.has(err.apiCode)) {
+          throw err; // 801/802/813 等终态：立即失败
         }
+        // P0.1-08：未知业务码不再无限当作排队；标记 UNKNOWN（带 apiCode），
+        // 由 TaskService.wait 的 unknownBusinessCodeCount 决定是否升级失败。
+        // 字符串推断（msg 含 queue/running）仅作展示态 fallback。
+        return {
+          state: inferQueued(err) ? "QUEUED" : "UNKNOWN",
+          outputs: [],
+          msg: err.message,
+          apiCode: err.apiCode,
+        };
       }
       throw err;
     }
@@ -180,13 +198,24 @@ function mapOutputsSuccess(data: unknown): TaskOutputsResult {
       url: parsed.fileUrl,
       type: parsed.fileType ?? "",
       nodeId: parsed.nodeId ?? undefined,
-      costTimeSeconds: parsed.taskCostTime ? Number(parsed.taskCostTime) : undefined,
+      costTimeSeconds: normalizeCostTime(parsed.taskCostTime),
     });
   }
   return { state: "SUCCEEDED", outputs };
 }
 
 function inferQueued(err: RhError): boolean {
+  // P0.1-08：字符串推断仅作 UNKNOWN→QUEUED 的展示态 fallback，不作为主判定
   const msg = err.message.toLowerCase();
   return msg.includes("queue") || msg.includes("queued") || msg.includes("running");
+}
+
+/**
+ * P0.1-06：官方 taskCostTime 可能是 "83"（字符串）或 83（数字）。
+ * 统一 normalize 为 finite number；无法转换 → undefined（不向 Agent 泄露 NaN）。
+ */
+function normalizeCostTime(value: string | number | null | undefined): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }

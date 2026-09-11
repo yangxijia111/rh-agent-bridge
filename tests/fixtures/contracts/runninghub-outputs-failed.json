@@ -1,0 +1,15 @@
+{
+  "code": 805,
+  "msg": "APIKEY_TASK_STATUS_ERROR",
+  "data": {
+    "failedReason": {
+      "node_name": "KSampler",
+      "node_id": "3",
+      "exception_type": "ValueError",
+      "exception_message": "anonymous failure message",
+      "traceback": "Traceback (most recent call last): ...",
+      "current_inputs": null,
+      "current_outputs": null
+    }
+  }
+}

@@ -267,10 +267,10 @@ describe("Level 2 schema 校验", () => {
   });
 });
 
-describe("Level 3 model 校验", () => {
+describe("Level 3 model 校验（P0.1-10：COMBO > /models/{folder} > 字段名 fallback）", () => {
   it("checkpoint 不在列表 → MODEL_NOT_FOUND（默认 warning 不致命）", () => {
     const result = validateGraph(loadFixture("basic-sdxl.json"), {
-      models: { checkpoints: ["other_model.safetensors"] },
+      models: { folders: { checkpoints: ["other_model.safetensors"] } },
     });
     expect(result.valid).toBe(true);
     expect(result.issues).toContainEqual(
@@ -280,7 +280,7 @@ describe("Level 3 model 校验", () => {
 
   it("strictModels=true 时升级为 error", () => {
     const result = validateGraph(loadFixture("basic-sdxl.json"), {
-      models: { checkpoints: ["other_model.safetensors"] },
+      models: { folders: { checkpoints: ["other_model.safetensors"] } },
       strictModels: true,
     });
     expect(result.valid).toBe(false);
@@ -288,8 +288,76 @@ describe("Level 3 model 校验", () => {
 
   it("模型在列表中则无问题", () => {
     const result = validateGraph(loadFixture("basic-sdxl.json"), {
-      models: { checkpoints: ["sd_xl_base_1.0.safetensors"] },
+      models: { folders: { checkpoints: ["sd_xl_base_1.0.safetensors"] } },
     });
     expect(result.issues.filter((i) => i.code === "MODEL_NOT_FOUND")).toEqual([]);
+  });
+
+  it("P0.1-10 优先级：object_info COMBO options 命中时优先于 /models folder 列表", () => {
+    // schema combo 只认 model_a/model_b；/models/checkpoints 却包含 model_x。
+    // 期望以 combo 为准：model_x 虽在 folder 列表中，仍报 MODEL_NOT_FOUND。
+    const graph = parseApiFormat({
+      "4": {
+        class_type: "CheckpointLoaderSimple",
+        inputs: { ckpt_name: "model_x.safetensors" },
+      },
+      "9": {
+        class_type: "SaveImage",
+        inputs: { filename_prefix: "x", images: ["4", 0] },
+      },
+    });
+    const result = validateGraph(graph, {
+      nodeSchemas: new FakeCatalog([
+        {
+          classType: "CheckpointLoaderSimple",
+          inputRequired: {
+            ckpt_name: { type: "COMBO", options: ["model_a.safetensors", "model_b.safetensors"] },
+          },
+          inputOptional: {},
+          outputTypes: ["MODEL", "CLIP", "VAE"],
+        },
+        {
+          classType: "SaveImage",
+          inputRequired: {
+            filename_prefix: { type: "STRING" },
+            images: { type: "IMAGE" },
+          },
+          inputOptional: {},
+          outputTypes: [],
+          outputNode: true,
+        },
+      ]),
+      models: { folders: { checkpoints: ["model_x.safetensors"] } },
+    });
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "MODEL_NOT_FOUND",
+        message: expect.stringMatching(/object_info combo options/),
+      }),
+    );
+  });
+
+  it("P0.1-10 优先级：无 schema 时退回 /models/{folder} 列表", () => {
+    const result = validateGraph(loadFixture("basic-sdxl.json"), {
+      models: { folders: { checkpoints: ["model_a.safetensors"] } },
+    });
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "MODEL_NOT_FOUND",
+        message: expect.stringMatching(/\/models\/checkpoints/),
+      }),
+    );
+  });
+
+  it("P0.1-10 优先级：folder 数据缺失时使用字段级 fallback", () => {
+    const result = validateGraph(loadFixture("basic-sdxl.json"), {
+      models: { byField: { ckpt_name: ["only_model.safetensors"] } },
+    });
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "MODEL_NOT_FOUND",
+        message: expect.stringMatching(/field-name fallback/),
+      }),
+    );
   });
 });

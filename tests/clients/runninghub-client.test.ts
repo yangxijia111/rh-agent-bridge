@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { RunningHubClient, type FetchLike } from "../../src/clients/runninghub/client.js";
 import { RhApiError, RhAuthError, RhRateLimitError } from "../../src/errors.js";
 
@@ -242,5 +245,64 @@ describe("UploadApi.uploadResource（AT-104）", () => {
     expect(seenForm?.get("apiKey")).toBe(TEST_KEY);
     expect(seenForm?.get("fileType")).toBe("input");
     expect(seenForm?.get("file")).toBeTruthy();
+  });
+});
+
+describe("P0.1-06/P0.1-12：contract fixture 驱动的响应契约测试", () => {
+  const CONTRACTS = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "fixtures",
+    "contracts",
+  );
+  const loadContract = (name: string): unknown =>
+    JSON.parse(readFileSync(path.join(CONTRACTS, name), "utf-8"));
+
+  it("create-success fixture：taskId/promptTips 解析（string taskCostTime 不在此路径）", async () => {
+    const client = makeClient(async () => new Response(JSON.stringify(loadContract("runninghub-create-success.json")), { status: 200 }));
+    const result = await client.task.createTask({ workflowId: "wf" });
+    expect(result.taskId).toBe("1910246754753896450");
+    expect(result.taskStatus).toBe("QUEUED");
+    expect(result.promptTips?.result).toBe(true);
+    expect(result.promptTips?.outputs_to_execute).toEqual(["9"]);
+  });
+
+  it("outputs-success（string taskCostTime）→ costTimeSeconds=83", async () => {
+    const client = makeClient(async () => new Response(JSON.stringify(loadContract("runninghub-outputs-success-string-time.json")), { status: 200 }));
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.state).toBe("SUCCEEDED");
+    expect(result.outputs[0]?.costTimeSeconds).toBe(83);
+  });
+
+  it("outputs-success（number taskCostTime）→ costTimeSeconds=83（P0.1-06 双形态）", async () => {
+    const client = makeClient(async () => new Response(JSON.stringify(loadContract("runninghub-outputs-success-number-time.json")), { status: 200 }));
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.state).toBe("SUCCEEDED");
+    expect(result.outputs[0]?.costTimeSeconds).toBe(83);
+  });
+
+  it("taskCostTime 非法字符串 → undefined（不泄露 NaN）", async () => {
+    const client = makeClient(() =>
+      json({
+        code: 0,
+        msg: "success",
+        data: [{ fileUrl: "https://x/y.png", fileType: "png", taskCostTime: "not-a-number" }],
+      }),
+    );
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.outputs[0]?.costTimeSeconds).toBeUndefined();
+  });
+
+  it("outputs-running fixture（code 804）→ RUNNING", async () => {
+    const client = makeClient(async () => new Response(JSON.stringify(loadContract("runninghub-outputs-running.json")), { status: 200 }));
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.state).toBe("RUNNING");
+  });
+
+  it("outputs-failed fixture（code 805）→ FAILED + failedReason", async () => {
+    const client = makeClient(async () => new Response(JSON.stringify(loadContract("runninghub-outputs-failed.json")), { status: 200 }));
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.state).toBe("FAILED");
+    expect(result.failedReason).toMatchObject({ node_id: "3", exception_type: "ValueError" });
   });
 });

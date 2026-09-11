@@ -18,6 +18,8 @@ export async function nodesProbeTool(
     source: snapshot.source,
     count: snapshot.count,
     capabilities: snapshot.capabilities,
+    // P0.1-11：逐端点明细（path + status），便于判断 proxy 不支持哪个 route；绝无 API key
+    ...(snapshot.probeDetails ? { details: snapshot.probeDetails } : {}),
     cacheAgeMs: snapshot.cacheAgeMs,
   };
 }

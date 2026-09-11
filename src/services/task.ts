@@ -21,6 +21,8 @@ export interface TaskWaitOptions {
 const BACKOFF_SCHEDULE_MS = [1000, 1000, 2000, 2000, 3000, 5000];
 const SETTLED_INTERVAL_MS = 5000;
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+/** P0.1-08：未知业务码连续容忍上限，超过即升级 TASK_FAILED(UNKNOWN_API_STATE) */
+const MAX_UNKNOWN_BUSINESS_CODE_COUNT = 2;
 
 export class TaskService {
   constructor(
@@ -34,7 +36,9 @@ export class TaskService {
 
   /**
    * 轮询直到 SUCCEEDED / FAILED / timeout / abort。
-   * @throws RhError(TASK_TIMEOUT) / RhError(ABORTED) / RhError(TASK_FAILED with failedReason)
+   * P0.1-08：UNKNOWN 状态（未确认业务码）连续出现超过 2 次即升级 TASK_FAILED，
+   * 不再无限当作排队直到 timeout。
+   * @throws rhError(TASK_TIMEOUT) / rhError(ABORTED) / rhError(TASK_FAILED with failedReason)
    */
   async wait(taskId: string, options: TaskWaitOptions = {}): Promise<TaskOutputsResult> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -43,6 +47,7 @@ export class TaskService {
     const now = options.now ?? Date.now;
     const deadline = now() + timeoutMs;
     let pollIndex = 0;
+    let unknownBusinessCodeCount = 0;
 
     for (;;) {
       if (options.signal?.aborted) {
@@ -56,6 +61,23 @@ export class TaskService {
           msg: result.msg,
           ...(result.failedReason !== undefined ? { failedReason: result.failedReason } : {}),
         });
+      }
+      if (result.state === "UNKNOWN") {
+        unknownBusinessCodeCount += 1;
+        if (unknownBusinessCodeCount > MAX_UNKNOWN_BUSINESS_CODE_COUNT) {
+          throw rhError(
+            "TASK_FAILED",
+            `task ${taskId} reported an unrecognized business code ${unknownBusinessCodeCount} times; aborting instead of polling indefinitely`,
+            {
+              taskId,
+              reason: "UNKNOWN_API_STATE",
+              ...(result.apiCode !== undefined ? { apiCode: result.apiCode } : {}),
+              ...(result.msg !== undefined ? { msg: result.msg } : {}),
+            },
+          );
+        }
+      } else {
+        unknownBusinessCodeCount = 0; // RUNNING/QUEUED 恢复正常计数
       }
       const nextDelay = fixedInterval ?? nextBackoffMs(pollIndex);
       pollIndex += 1;

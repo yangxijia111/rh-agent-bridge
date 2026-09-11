@@ -73,7 +73,13 @@ function parseNodeInfoJson(arg: string): OverridePair[] {
   return parsed as OverridePair[];
 }
 
-export function buildProgram(options: { sinks?: OutputSinks; env?: NodeJS.ProcessEnv } = {}) {
+export function buildProgram(
+  options: {
+    sinks?: OutputSinks;
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: import("../clients/runninghub/client.js").FetchLike;
+  } = {},
+) {
   const sinks = options.sinks ?? defaultSinks;
   const program = new Command();
   program
@@ -81,7 +87,7 @@ export function buildProgram(options: { sinks?: OutputSinks; env?: NodeJS.Proces
     .description(
       "RunningHub / ComfyUI workflow bridge for coding agents (API-first, browser-fallback)",
     )
-    .version("0.1.0")
+    .version("0.1.1")
     .option("--json", "Agent mode: print machine-readable JSON to stdout only")
     .exitOverride((err) => {
       // --version / --help 属于正常退出；其余（unknown command 等）交给 catch 输出
@@ -98,7 +104,9 @@ export function buildProgram(options: { sinks?: OutputSinks; env?: NodeJS.Proces
   /** 惰性 context：只有真正需要时才创建（本地纯图操作不必强制配置 key） */
   let ctxCache: ReturnType<typeof createBridgeContext> | undefined;
   function ctx() {
-    ctxCache ??= createBridgeContext(options.env ?? process.env);
+    ctxCache ??= createBridgeContext(options.env ?? process.env, {
+      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+    });
     return ctxCache;
   }
 
@@ -179,22 +187,25 @@ export function buildProgram(options: { sinks?: OutputSinks; env?: NodeJS.Proces
     .requiredOption("--node <nodeId>")
     .requiredOption("--field <name>")
     .requiredOption("--value <value>")
+    .option("--workflow-id <id>", "needed for frontend-only fields (remote baseline snapshot)")
     .option("--out <file>", "write modified API Format to file")
-    .action(async (file: string, opts: { node: string; field: string; value: string; out?: string }) => {
-      await runCli(async () => {
-        const graph = readGraphFile(file);
-        const result = await workflowPatchTool(ctx(), {
-          graph,
-          operations: [
-            {
-              type: "set_input",
-              nodeId: opts.node,
-              field: opts.field,
-              value: coerceValue(opts.value),
-            },
-          ],
-          useNodeSchema: false,
-        });
+    .action(
+      async (file: string, opts: { node: string; field: string; value: string; workflowId?: string; out?: string }) => {
+        await runCli(async () => {
+          const graph = readGraphFile(file);
+          const result = await workflowPatchTool(ctx(), {
+            graph,
+            ...(opts.workflowId !== undefined ? { workflowId: opts.workflowId } : {}),
+            operations: [
+              {
+                type: "set_input",
+                nodeId: opts.node,
+                field: opts.field,
+                value: coerceValue(opts.value),
+              },
+            ],
+            useNodeSchema: false,
+          });
         if ("requiresBrowser" in result) return result;
         if (opts.out) writeGraphFile(opts.out, result.graph);
         return {
@@ -204,8 +215,9 @@ export function buildProgram(options: { sinks?: OutputSinks; env?: NodeJS.Proces
           nodeInfoList: result.nodeInfoList,
           ...(opts.out ? { savedTo: opts.out } : {}),
         };
-      });
-    });
+        });
+      },
+    );
 
   workflow
     .command("patch")

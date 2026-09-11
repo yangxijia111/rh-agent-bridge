@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli/main.js";
 import type { OutputSinks } from "../../src/cli/output.js";
+import type { FetchLike } from "../../src/clients/runninghub/client.js";
 
 const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const FIXTURES = path.join(PROJECT_ROOT, "tests", "fixtures");
@@ -15,8 +16,23 @@ interface Captured {
   exitCode: number;
 }
 
+/** mock fetch：getJsonApiFormat 返回远端 API Format（seed=1，P0.1-03 基线用） */
+const remoteFetchMock: FetchLike = async (url) => {
+  if (url.includes("/api/openapi/getJsonApiFormat")) {
+    const remote = {
+      "3": { class_type: "KSampler", inputs: { seed: 1 } },
+      "9": { class_type: "SaveImage", inputs: { filename_prefix: "x", images: ["3", 0] } },
+    };
+    return new Response(
+      JSON.stringify({ code: 0, msg: "SUCCESS", data: { prompt: JSON.stringify(remote) } }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  return new Response(JSON.stringify({ code: 404, msg: "not found" }), { status: 404 });
+};
+
 /** 进程内驱动 CLI：注入捕获流，环境无 API key（本地纯图命令不应需要） */
-async function runCli(args: string[]): Promise<Captured> {
+async function runCli(args: string[], options: { fetchImpl?: FetchLike } = {}): Promise<Captured> {
   const captured: Captured = { stdout: "", stderr: "", exitCode: 0 };
   const sinks: OutputSinks = {
     out: (text) => {
@@ -29,13 +45,17 @@ async function runCli(args: string[]): Promise<Captured> {
       captured.exitCode = code;
     },
   };
-  const program = buildProgram({ sinks, env: { ...process.env, RUNNINGHUB_API_KEY: "", RH_LOG_LEVEL: "silent" } });
+  const program = buildProgram({
+    sinks,
+    env: { ...process.env, RUNNINGHUB_API_KEY: "", RH_LOG_LEVEL: "silent" },
+    ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+  });
   await program.parseAsync(args, { from: "user" });
   return captured;
 }
 
-async function runCliJson<T>(args: string[]): Promise<T> {
-  const captured = await runCli(["--json", ...args]);
+async function runCliJson<T>(args: string[], options: { fetchImpl?: FetchLike } = {}): Promise<T> {
+  const captured = await runCli(["--json", ...args], options);
   expect(captured.exitCode).toBe(0);
   return JSON.parse(captured.stdout) as T;
 }
@@ -170,35 +190,98 @@ describe("CLI 本地图操作（M5）", () => {
     expect(result.inputsChanged).toEqual([{ nodeId: "3", field: "steps", before: 20, after: 30 }]);
   });
 
-  it("前端-only 字段 set-input 返回 requiresBrowser 且不写文件（AT-401 CLI 路径）", async () => {
+  it("前端-only 字段 set-input（带 --workflow-id）返回 requiresBrowser 且不写文件（AT-401 CLI 路径）", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "rh-cli-"));
     const outFile = path.join(dir, "nope.json");
     writeFileSync(outFile, "", "utf-8");
-    const result = await runCliJson<{ requiresBrowser: boolean; reason: string }>([
-      "workflow",
-      "set-input",
-      path.join(FIXTURES, "basic-sdxl.json"),
-      "--node",
-      "3",
-      "--field",
-      "control_after_generate",
-      "--value",
-      "fixed",
-      "--out",
-      outFile,
-    ]);
+    const result = await runCliJson<{ requiresBrowser: boolean; reason: string }>(
+      [
+        "workflow",
+        "set-input",
+        path.join(FIXTURES, "basic-sdxl.json"),
+        "--node",
+        "3",
+        "--field",
+        "control_after_generate",
+        "--value",
+        "fixed",
+        "--workflow-id",
+        "wf-at401",
+        "--out",
+        outFile,
+      ],
+      { fetchImpl: remoteFetchMock },
+    );
     expect(result.requiresBrowser).toBe(true);
     expect(result.reason).toBe("FRONTEND_ONLY_FIELD");
     expect(readFileSync(outFile, "utf-8")).toBe("");
   });
 
-  it("doctor --no-probe-native：缺 key 时结构化报告", async () => {
+  it("P0.1-03：前端-only fallback 的 baseline 快照是远端 seed=1，不是本地 candidate", async () => {
+    // 本地文件 seed=156680208700286（basic-sdxl），远端 mock seed=1；
+    // baseline 必须取远端 → 快照目录里 .baseline. 文件 seed=1
+    const result = await runCliJson<{ preconditions: string[] }>(
+      [
+        "workflow",
+        "set-input",
+        path.join(FIXTURES, "basic-sdxl.json"),
+        "--node",
+        "3",
+        "--field",
+        "control_after_generate",
+        "--value",
+        "fixed",
+        "--workflow-id",
+        "wf-at401",
+      ],
+      { fetchImpl: remoteFetchMock },
+    );
+    const snapshotPath = result.preconditions[0]?.match(/at (\S+)/)?.[1];
+    expect(snapshotPath).toBeDefined();
+    expect(snapshotPath).toMatch(/\.baseline\./);
+    const content = JSON.parse(readFileSync(snapshotPath, "utf-8"));
+    expect(content["3"].inputs.seed).toBe(1);
+  });
+
+  it("P0.1-04：CLI run --set 连接值被拦截（UNSUPPORTED）", async () => {
+    const captured = await runCli([
+      "--json",
+      "workflow",
+      "run",
+      "--workflow-id",
+      "wf-x",
+      "--set",
+      '3.model=["42",0]',
+    ]);
+    expect(captured.exitCode).toBe(1);
+    const parsed = JSON.parse(captured.stdout) as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe("UNSUPPORTED");
+    expect(parsed.error.message).toMatch(/full workflow JSON/);
+  });
+
+  it("P0.1-04：CLI run --set 前端-only 字段被拦截（REQUIRES_BROWSER）", async () => {
+    const captured = await runCli([
+      "--json",
+      "workflow",
+      "run",
+      "--workflow-id",
+      "wf-x",
+      "--set",
+      "3.control_after_generate=fixed",
+    ]);
+    expect(captured.exitCode).toBe(1);
+    const parsed = JSON.parse(captured.stdout) as { error: { code: string } };
+    expect(parsed.error.code).toBe("REQUIRES_BROWSER");
+  });
+
+  it("doctor --no-probe-native：缺 key 时结构化报告（P0.1-07：configured 而非 authenticated）", async () => {
     const result = await runCliJson<{
       ok: boolean;
-      runningHub: { authenticated: boolean; missing?: string[] };
+      runningHub: { configured: boolean; authenticationChecked: boolean; missing?: string[] };
     }>(["doctor", "--no-probe-native"]);
     expect(result.ok).toBe(false);
-    expect(result.runningHub.authenticated).toBe(false);
+    expect(result.runningHub.configured).toBe(false);
+    expect(result.runningHub.authenticationChecked).toBe(false);
     expect(result.runningHub.missing).toContain("RUNNINGHUB_API_KEY");
   });
 

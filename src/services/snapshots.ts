@@ -1,20 +1,24 @@
 /**
- * Workflow snapshot 存储（02 §14、05 快照策略）。
+ * Workflow snapshot 存储（02 §14、05 快照策略、P0.1-03 语义）。
  *
- * 路径：<home>/.rh-agent/snapshots/<safeId>.<timestamp>.<sha256前8位>.json
+ * 两种快照（P0.1-03）：
+ *  - baseline：RunningHub 远端当前状态（rollback 依据）——full workflow run /
+ *    browser fallback 变更前必须保存，且必须来自远端 fetch，而非本地候选 graph；
+ *  - candidate：即将提交/执行的候选状态（可选保存，便于审计对比）。
  *
- * 触发时机（05）：
- *  - full workflow run 之前
- *  - browser fallback mutation 之前（强制，AT-402）
- *  - recorder（P2）
+ * 路径：<home>/.rh-agent/snapshots/<safeId>.<kind>.<timestamp>.<sha256前8位>.json
  */
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
+export type SnapshotKind = "baseline" | "candidate";
+
 export interface SnapshotRecord {
   workflowId: string;
+  /** P0.1-03：baseline=远端当前态（rollback 依据）；candidate=即将提交的候选态 */
+  kind: SnapshotKind;
   filePath: string;
   savedAt: string;
 }
@@ -29,19 +33,20 @@ export class SnapshotStore {
     );
   }
 
-  /** 保存 workflow 快照；失败抛错（调用方不得在快照失败后继续 browser mutation） */
+  /** 保存快照；失败抛错（调用方不得在快照失败后继续 mutation/run/browser 变更） */
   async saveWorkflowSnapshot(
     workflowId: string,
+    kind: SnapshotKind,
     apiFormatJson: Record<string, unknown>,
     now: () => Date = () => new Date(),
   ): Promise<SnapshotRecord> {
     const serialized = JSON.stringify(apiFormatJson, null, 2);
     const shaPrefix = createHash("sha256").update(serialized).digest("hex").slice(0, 8);
     const timestamp = now().toISOString().replace(/[:.]/g, "-");
-    // workflowId 消毒：白名单字符，防止路径穿越
+    // workflowId / kind 消毒：白名单字符，防止路径穿越
     const safeId = sanitizeFileToken(workflowId);
-    const safeTimestamp = sanitizeFileToken(timestamp);
-    const fileName = `${safeId}.${safeTimestamp}.${shaPrefix}.json`;
+    const safeKind = sanitizeFileToken(kind);
+    const fileName = `${safeId}.${safeKind}.${timestamp}.${shaPrefix}.json`;
     // 边界校验：拼接结果必须仍位于 baseDir 内
     const target = path.resolve(this.baseDir, fileName);
     const root = path.resolve(this.baseDir);
@@ -50,7 +55,7 @@ export class SnapshotStore {
     }
     await mkdir(root, { recursive: true });
     await writeFile(target, serialized, "utf-8");
-    return { workflowId, filePath: target, savedAt: now().toISOString() };
+    return { workflowId, kind, filePath: target, savedAt: now().toISOString() };
   }
 }
 

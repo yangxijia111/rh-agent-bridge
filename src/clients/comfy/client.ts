@@ -13,7 +13,15 @@
 import type { Logger } from "../../config/logger.js";
 import { RhNetworkError } from "../../errors.js";
 import type { FetchLike } from "../runninghub/client.js";
-import { featuresSchema, modelsSchema, objectInfoSchema, type ModelsRaw, type ObjectInfoRaw } from "./schemas.js";
+import {
+  featuresSchema,
+  modelFoldersSchema,
+  modelsByFolderSchema,
+  objectInfoSchema,
+  type ModelFoldersRaw,
+  type ModelsByFolderRaw,
+  type ObjectInfoRaw,
+} from "./schemas.js";
 
 export interface NativeComfyClientOptions {
   /** 已含 /proxy/<key> 的 base url；禁止直接写日志 */
@@ -53,8 +61,17 @@ export class NativeComfyClient {
     return this.getJson(`/object_info/${encodeURIComponent(classType)}`, objectInfoSchema);
   }
 
-  async getModels(): Promise<NativeEndpointResult<ModelsRaw>> {
-    return this.getJson("/models", modelsSchema);
+  /** GET /models → folder 名称列表（不是模型文件列表） */
+  async getModelFolders(): Promise<NativeEndpointResult<ModelFoldersRaw>> {
+    return this.getJson("/models", modelFoldersSchema);
+  }
+
+  /** GET /models/{folder} → 该 folder 下的模型文件列表；folder 不存在时 ok=false */
+  async getModelsByFolder(folder: string): Promise<NativeEndpointResult<ModelsByFolderRaw>> {
+    return this.getJson(
+      `/models/${encodeURIComponent(folder)}`,
+      modelsByFolderSchema,
+    );
   }
 
   async getFeatures(): Promise<NativeEndpointResult<Record<string, unknown>>> {

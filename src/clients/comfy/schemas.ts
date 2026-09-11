@@ -26,9 +26,17 @@ export const objectInfoSchema = z.record(
 );
 export type ObjectInfoRaw = z.infer<typeof objectInfoSchema>;
 
-/** GET /models → { [folder]: string[] } */
-export const modelsSchema = z.record(z.string(), z.array(z.string()));
-export type ModelsRaw = z.infer<typeof modelsSchema>;
+/**
+ * GET /models → 模型 folder/type 名称列表（ComfyUI Server API 语义）：
+ *   ["checkpoints", "loras", "vae", "upscale_models", ...]
+ * 具体模型文件在 GET /models/{folder}。
+ */
+export const modelFoldersSchema = z.array(z.string());
+export type ModelFoldersRaw = z.infer<typeof modelFoldersSchema>;
+
+/** GET /models/{folder} → 该 folder 下的模型文件名列表 */
+export const modelsByFolderSchema = z.array(z.string());
+export type ModelsByFolderRaw = z.infer<typeof modelsByFolderSchema>;
 
 /** GET /features → 任意 JSON 对象 */
 export const featuresSchema = z.record(z.string(), z.unknown());

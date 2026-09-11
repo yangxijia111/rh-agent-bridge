@@ -1,6 +1,6 @@
 {
   "name": "rh-agent-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent-neutral RunningHub / ComfyUI workflow bridge: API-first, browser-fallback",
   "type": "module",
   "engines": {

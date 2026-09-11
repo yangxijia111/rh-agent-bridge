@@ -26,16 +26,25 @@ export interface BridgeContext {
   browserFallback: BrowserFallbackService;
 }
 
-export function createBridgeContext(env: NodeJS.ProcessEnv = process.env): BridgeContext {
+export function createBridgeContext(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { fetchImpl?: import("../clients/runninghub/client.js").FetchLike } = {},
+): BridgeContext {
   const config = loadConfig(env);
   const logger = createLogger({
     level: config.logLevel,
     redaction: { secrets: [config.apiKey] },
   });
-  const rh = new RunningHubClient({ baseUrl: config.baseUrl, apiKey: config.apiKey, logger });
+  const rh = new RunningHubClient({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    logger,
+    ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+  });
   const comfy = new NativeComfyClient({
     proxyBaseUrl: nativeProxyBaseUrl(config),
     logger,
+    ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
   });
   const catalog = new NodeCatalogService(comfy, logger);
   const snapshots = new SnapshotStore();

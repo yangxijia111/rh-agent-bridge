@@ -59,11 +59,11 @@ export const createTaskDataSchema = z.object({
   promptTips: z.string().nullish(),
 });
 
-/** outputs 成功时的单个输出条目 */
+/** outputs 成功时的单个输出条目（P0.1-06：taskCostTime 官方示例为字符串，但实测可能是数字） */
 export const taskOutputItemSchema = z.object({
   fileUrl: z.string(),
   fileType: z.string().nullish(),
-  taskCostTime: z.string().nullish(),
+  taskCostTime: z.union([z.string(), z.number()]).nullish(),
   nodeId: z.string().nullish(),
   thirdPartyConsumeMoney: z.unknown().nullish(),
   consumeMoney: z.unknown().nullish(),
