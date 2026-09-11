@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# 编译产物
+dist/
+*.tsbuildinfo
+
+# 测试覆盖率
+coverage/
+
+# 环境变量文件含 API key，严禁提交
+.env
+.env.local
+.env.*.local
+
+# 运行期产物（快照/缓存/日志）
+.rh-agent/
+*.log
+
+# 本地安全工具与 IDE 状态
+.mimosa/
+.idea/
+.vscode/
+*.swp
+
+# 操作系统
+.DS_Store
+Thumbs.db

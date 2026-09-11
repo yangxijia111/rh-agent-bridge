@@ -1,0 +1,45 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example_image.png",
+      "upload": "image"
+    },
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "2": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "width": 2048,
+      "height": 2048,
+      "crop": "disabled",
+      "image": ["1", 0]
+    },
+    "_meta": {
+      "title": "Upscale Image"
+    }
+  },
+  "10": {
+    "class_type": "RHSVierBDUNBWAF",
+    "inputs": {
+      "alpha_cutoff": 0.1,
+      "images": ["2", 0]
+    },
+    "_meta": {
+      "title": "Remove Background"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": ["10", 0]
+    },
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

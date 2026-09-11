@@ -1,0 +1,47 @@
+{
+  "name": "rh-agent-bridge",
+  "version": "0.1.0",
+  "description": "Agent-neutral RunningHub / ComfyUI workflow bridge: API-first, browser-fallback",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "rh": "dist/cli/main.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx src/cli/main.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "lint": "eslint src tests",
+    "format": "prettier --write src tests",
+    "demo:a": "bash examples/demo-a-param-only.sh",
+    "demo:b": "bash examples/demo-b-topology.sh"
+  },
+  "keywords": [
+    "runninghub",
+    "comfyui",
+    "mcp",
+    "agent",
+    "workflow"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "commander": "^12.1.0",
+    "pino": "^9.6.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^3.0.0"
+  }
+}

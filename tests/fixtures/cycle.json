@@ -1,0 +1,23 @@
+{
+  "A": {
+    "class_type": "NodeA",
+    "inputs": {
+      "x": 1,
+      "dep": ["B", 0]
+    }
+  },
+  "B": {
+    "class_type": "NodeB",
+    "inputs": {
+      "y": 2,
+      "dep": ["A", 0]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": ["A", 0]
+    }
+  }
+}

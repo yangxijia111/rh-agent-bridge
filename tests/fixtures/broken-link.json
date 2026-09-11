@@ -1,0 +1,38 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 1,
+      "steps": 20,
+      "model": ["999", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "hello",
+      "clip": ["999", 1]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": ["4", 1]
+    }
+  }
+}
