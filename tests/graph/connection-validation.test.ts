@@ -94,7 +94,7 @@ describe("P0.1-02：连接 schema 校验（validateConnectionsAgainstSchema）",
     expect(issues.filter((i) => i.field === "images")).toEqual([]);
   });
 
-  it("连接写入 INT 字段 FAIL（→ KSampler.steps 报 CONNECTION_NOT_ALLOWED）", () => {
+  it("MODEL → INT FAIL（→ KSampler.steps 报 CONNECTION_TYPE_MISMATCH；P0.1.1 新语义：不再一刀切 CONNECTION_NOT_ALLOWED）", () => {
     const graph = parseApiFormat({
       "4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "model_a.safetensors" } },
       "3": {
@@ -106,11 +106,138 @@ describe("P0.1-02：连接 schema 校验（validateConnectionsAgainstSchema）",
     expect(issues).toContainEqual(
       expect.objectContaining({
         severity: "error",
-        code: "CONNECTION_NOT_ALLOWED",
+        code: "CONNECTION_TYPE_MISMATCH",
         field: "steps",
-        message: expect.stringMatching(/INT primitive input/),
+        details: expect.objectContaining({ sourceType: "MODEL", targetType: "INT" }),
       }),
     );
+  });
+
+  it("P0.1.1 Fix 2：primitive 同类型连接 PASS（widget-convert 合法路径）", () => {
+    /** 输出 primitive 的节点（模拟 PrimitiveNode / widget-convert 源） */
+    const primitiveCatalog: NodeSchemaLookup = {
+      get: (c) =>
+        c === "PrimitiveInt"
+          ? {
+              classType: "PrimitiveInt",
+              inputRequired: { value: { type: "INT" } },
+              inputOptional: {},
+              outputTypes: ["INT"],
+            }
+          : c === "PrimitiveFloat"
+            ? {
+                classType: "PrimitiveFloat",
+                inputRequired: { value: { type: "FLOAT" } },
+                inputOptional: {},
+                outputTypes: ["FLOAT"],
+              }
+            : c === "PrimitiveString"
+              ? {
+                  classType: "PrimitiveString",
+                  inputRequired: { value: { type: "STRING" } },
+                  inputOptional: {},
+                  outputTypes: ["STRING"],
+                }
+              : c === "PrimitiveBool"
+                ? {
+                    classType: "PrimitiveBool",
+                    inputRequired: { value: { type: "BOOLEAN" } },
+                    inputOptional: {},
+                    outputTypes: ["BOOLEAN"],
+                  }
+                : catalog.get(c),
+      count: () => catalog.count() + 4,
+    };
+    const mk = (sourceClass: string, targetField: string): ReturnType<typeof parseApiFormat> =>
+      parseApiFormat({
+        "1": { class_type: sourceClass, inputs: {} },
+        "3": { class_type: "KSampler", inputs: { [targetField]: ["1", 0] } },
+      });
+
+    // INT → INT（KSampler.steps）
+    expect(
+      validateConnectionsAgainstSchema(mk("PrimitiveInt", "steps"), primitiveCatalog),
+    ).toEqual([]);
+    // FLOAT → FLOAT（KSampler.cfg）
+    expect(
+      validateConnectionsAgainstSchema(mk("PrimitiveFloat", "cfg"), primitiveCatalog),
+    ).toEqual([]);
+    // STRING → STRING（SaveImage.filename_prefix）
+    const stringGraph = parseApiFormat({
+      "1": { class_type: "PrimitiveString", inputs: {} },
+      "9": { class_type: "SaveImage", inputs: { filename_prefix: ["1", 0] } },
+    });
+    expect(validateConnectionsAgainstSchema(stringGraph, primitiveCatalog)).toEqual([]);
+    // BOOLEAN → BOOLEAN（构造 bool 目标节点）
+    const boolGraph = parseApiFormat({
+      "1": { class_type: "PrimitiveBool", inputs: {} },
+      "2": {
+        class_type: "BoolConsumer",
+        inputs: { flag: ["1", 0] },
+      },
+    });
+    expect(
+      validateConnectionsAgainstSchema(boolGraph, {
+        get: (c) =>
+          c === "BoolConsumer"
+            ? {
+                classType: "BoolConsumer",
+                inputRequired: { flag: { type: "BOOLEAN" } },
+                inputOptional: {},
+                outputTypes: ["IMAGE"],
+                outputNode: true,
+              }
+            : primitiveCatalog.get(c),
+        count: () => primitiveCatalog.count() + 1,
+      }),
+    ).toEqual([]);
+  });
+
+  it("P0.1.1 Fix 2：INT → MODEL FAIL（反向 mismatch 同样成立）", () => {
+    const graph = parseApiFormat({
+      "1": { class_type: "PrimitiveInt", inputs: {} },
+      "3": { class_type: "KSampler", inputs: { model: ["1", 0] } },
+    });
+    const c: NodeSchemaLookup = {
+      get: (k) =>
+        k === "PrimitiveInt"
+          ? {
+              classType: "PrimitiveInt",
+              inputRequired: { value: { type: "INT" } },
+              inputOptional: {},
+              outputTypes: ["INT"],
+            }
+          : catalog.get(k),
+      count: () => catalog.count() + 1,
+    };
+    const issues = validateConnectionsAgainstSchema(graph, c);
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "CONNECTION_TYPE_MISMATCH",
+        details: expect.objectContaining({ sourceType: "INT", targetType: "MODEL" }),
+      }),
+    );
+  });
+
+  it("P0.1.1 Fix 2：连接进 COMBO 字段 → warning（不得直接 error；socket 类型无法判断）", () => {
+    const graph = parseApiFormat({
+      "4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "model_a.safetensors" } },
+      "3": { class_type: "KSampler", inputs: { sampler_name: ["4", 0] } },
+    });
+    const issues = validateConnectionsAgainstSchema(graph, catalog);
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        severity: "warning",
+        code: "UNKNOWN_TYPE_COMPAT",
+        field: "sampler_name",
+      }),
+    );
+    // 不得出现一刀切的 CONNECTION_NOT_ALLOWED 或 mismatch error
+    expect(issues.filter((i) => i.code === "CONNECTION_NOT_ALLOWED")).toEqual([]);
+    expect(
+      issues.filter((i) => i.code === "CONNECTION_TYPE_MISMATCH" && i.field === "sampler_name"),
+    ).toEqual([]);
   });
 
   it("outputIndex 越界 FAIL（CheckpointLoader[5] 不存在）", () => {

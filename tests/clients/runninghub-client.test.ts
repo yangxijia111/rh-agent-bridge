@@ -293,10 +293,32 @@ describe("P0.1-06/P0.1-12：contract fixture 驱动的响应契约测试", () =>
     expect(result.outputs[0]?.costTimeSeconds).toBeUndefined();
   });
 
-  it("outputs-running fixture（code 804）→ RUNNING", async () => {
+  it("outputs-running fixture（code 804）→ RUNNING（P0.1.1 Case C：已知 transient 码不被字符串推断路径影响）", async () => {
     const client = makeClient(async () => new Response(JSON.stringify(loadContract("runninghub-outputs-running.json")), { status: 200 }));
     const result = await client.task.getTaskOutputs("t");
     expect(result.state).toBe("RUNNING");
+  });
+
+  it("P0.1.1 Case A：未知业务码 999 + msg 含 queued → 仍是 UNKNOWN（不被字符串推断改写）", async () => {
+    const client = makeClient(() =>
+      json({ code: 999, msg: "task queued, please wait", data: null }),
+    );
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.state).toBe("UNKNOWN");
+    expect(result.state).not.toBe("QUEUED");
+    expect(result.apiCode).toBe(999);
+    // 字符串推断仅保留为展示提示
+    expect(result.displayHint).toBe("QUEUED");
+  });
+
+  it("P0.1.1：未知业务码 msg 不含 queue/running → UNKNOWN 且无 displayHint", async () => {
+    const client = makeClient(() =>
+      json({ code: 942, msg: "SOMETHING_UNEXPECTED", data: null }),
+    );
+    const result = await client.task.getTaskOutputs("t");
+    expect(result.state).toBe("UNKNOWN");
+    expect(result.apiCode).toBe(942);
+    expect(result.displayHint).toBeUndefined();
   });
 
   it("outputs-failed fixture（code 805）→ FAILED + failedReason", async () => {
